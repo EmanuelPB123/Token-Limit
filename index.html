@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CesiumJS con Caché Local (Service Worker)</title>
+  
+  <!-- CesiumJS CDN -->
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Cesium.js"></script>
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: Arial, sans-serif; }
+    html, body, #cesiumContainer { width: 100%; height: 100%; overflow: hidden; position: relative; }
+
+    /* Panel de controles */
+    .control-panel {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      z-index: 1000;
+      background: rgba(23, 25, 35, 0.9);
+      backdrop-filter: blur(8px);
+      padding: 16px 20px;
+      border-radius: 10px;
+      color: #ffffff;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-width: 260px;
+    }
+
+    .control-panel select, .control-panel button {
+      padding: 10px 12px;
+      font-size: 14px;
+      border-radius: 6px;
+      border: 1px solid #4a5568;
+      background-color: #2d3748;
+      color: #ffffff;
+      outline: none;
+      cursor: pointer;
+    }
+
+    .status-badge {
+      font-size: 12px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      background: #319795;
+      color: white;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="control-panel">
+    <label for="citySelect">Seleccionar Ciudad:</label>
+    <select id="citySelect">
+      <option value="" disabled selected>-- Elegí una ciudad --</option>
+      <option value="-67.4864,-45.8647,1500,45">Comodoro Rivadavia</option>
+      <option value="-58.3816,-34.6037,2000,60">Buenos Aires</option>
+      <option value="-64.1810,-31.4135,2500,50">Córdoba</option>
+      <option value="-74.0060,40.7128,2000,60">Nueva York</option>
+    </select>
+
+    <div id="cacheStatus" class="status-badge">Inicializando Caché...</div>
+    <button onclick="limpiarCache()">Borrar Caché Local</button>
+  </div>
+
+  <div id="cesiumContainer"></div>
+
+  <script>
+    // ============================================================
+    // 1. REGISTRO DEL SERVICE WORKER (Caché de recursos de Cesium ion)
+    // ============================================================
+    const cacheStatus = document.getElementById('cacheStatus');
+    let cacheHits = 0;
+    if (!('serviceWorker' in navigator)) {
+      cacheStatus.innerText = 'Service Worker no disponible en este navegador';
+    } else if (!window.isSecureContext) {
+      cacheStatus.innerText = 'Caché requiere HTTPS o localhost';
+    } else if (!('caches' in window)) {
+      cacheStatus.innerText = 'Caché local no disponible en este navegador';
+    } else {
+      async function actualizarEstadoCache() {
+        try {
+          const cache = await caches.open('cesium-ion-assets-v2');
+          const cachedCount = (await cache.keys()).length;
+          cacheStatus.innerText =
+            `Caché activa: ${cachedCount} recursos guardados, ${cacheHits} reutilizados`;
+        } catch (error) {
+          cacheStatus.innerText = 'Error al consultar la Caché';
+          console.error('Error al consultar la caché local:', error);
+        }
+      }
+
+      navigator.serviceWorker.addEventListener('message', (event) => {
+        if (
+          event.data?.type === 'CESIUM_CACHE_HIT' ||
+          event.data?.type === 'CESIUM_CACHE_STORED'
+        ) {
+          if (event.data.type === 'CESIUM_CACHE_HIT') {
+            cacheHits += 1;
+          }
+          actualizarEstadoCache();
+        }
+      });
+
+      navigator.serviceWorker.addEventListener('controllerchange', actualizarEstadoCache);
+
+      navigator.serviceWorker.register('./service-worker.js')
+        .then(() => navigator.serviceWorker.ready)
+        .then(() => {
+          if (navigator.serviceWorker.controller) {
+            actualizarEstadoCache();
+          } else {
+            cacheStatus.innerText = 'Service Worker listo; activando caché...';
+          }
+        })
+        .catch(error => {
+          cacheStatus.innerText = 'Error en Caché';
+          console.error('Error al registrar Service Worker:', error);
+        });
+    }
+
+    // Función para vaciar la memoria local guardada
+    async function limpiarCache() {
+      if (!('caches' in window)) {
+        alert('La caché local no está disponible en este navegador.');
+        return;
+      }
+
+      try {
+        const deleted = await caches.delete('cesium-ion-assets-v2');
+        cacheHits = 0;
+        alert(deleted
+          ? 'Caché local eliminada. Las próximas peticiones descargarán de nuevo.'
+          : 'No había recursos guardados en la caché.');
+        cacheStatus.innerText = 'Caché activa: 0 recursos guardados, 0 reutilizados';
+      } catch (error) {
+        console.error('Error al borrar la caché local:', error);
+        alert('No se pudo borrar la caché local. Revisá la consola para más detalles.');
+      }
+    }
+
+    // ============================================================
+    // 2. CONFIGURACIÓN Y MAPA EN CESIUMJS
+    // ============================================================
+    
+    // !!! PONÉ TU TOKEN AQUÍ !!!
+    Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJub25jZSI6IjZ3X0ZPRUxMVHNYMU04QkgiLCJqdGkiOiI5OGExODM1Yi05ZTA1LTRhYTMtYjRjOC01NDU5NWM0MmEyNWUiLCJpZCI6Mzc0NDM2LCJzdWIiOiJFbWFudWVsIFBCIiwiaXNzIjoiaHR0cHM6Ly9hcGkuY2VzaXVtLmNvbSIsImF1ZCI6IkVtYW51ZWwgUEJfZGVmYXVsdCIsImlhdCI6MTc5MTMyNjA3OH0.tZAiDSvXJlSqx1tvI3Xxjc_eeHcEdKxjTNJoXoBqdFc';
+
+    const viewer = new Cesium.Viewer('cesiumContainer', {
+      terrain: Cesium.Terrain.fromWorldTerrain(),
+      animation: false,
+      timeline: false,
+      baseLayerPicker: true
+    });
+
+    // Cargar Edificios 3D OSM
+    async function init3DBuildings() {
+      try {
+        const buildingTileset = await Cesium.Cesium3DTileset.fromIonAssetId(96188);
+        viewer.scene.primitives.add(buildingTileset);
+      } catch (error) {
+        console.warn('Para ver edificios 3D ingresá un Token válido de Cesium ion arriba.');
+      }
+    }
+    init3DBuildings();
+
+    // Vuelo de cámara
+    function flyToCity(lon, lat, height = 2000, pitchDegree = 45) {
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(lon, lat, height),
+        orientation: {
+          heading: Cesium.Math.toRadians(0),
+          pitch: Cesium.Math.toRadians(-pitchDegree),
+          roll: 0.0
+        },
+        duration: 2.5
+      });
+    }
+
+    document.getElementById('citySelect').addEventListener('change', (e) => {
+      const [lon, lat, height, pitch] = e.target.value.split(',').map(Number);
+      flyToCity(lon, lat, height, pitch);
+    });
+  </script>
+</body>
+</html>
